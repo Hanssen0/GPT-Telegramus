@@ -134,6 +134,7 @@ async def send_message_async(
     messages: List[Dict],
     request_response: RequestResponseContainer.RequestResponseContainer,
     end=False,
+    plain_text=False,
 ):
     """
     Prepare message and send
@@ -156,7 +157,9 @@ async def send_message_async(
             if response_len == 0 and len(request_response.response_images) == 0:
                 request_response.response = messages["empty_message"]
 
-        await _send_prepared_message_async(config, messages, request_response, end)
+        await _send_prepared_message_async(
+            config, messages, request_response, end, plain_text
+        )
 
     # Error?
     except Exception as e:
@@ -171,6 +174,7 @@ async def _send_prepared_message_async(
     messages: Dict,
     request_response: RequestResponseContainer.RequestResponseContainer,
     end=False,
+    plain_text=False,
 ):
     """
     Sends new message or edits current one
@@ -183,7 +187,7 @@ async def _send_prepared_message_async(
     if not should_send_message(config, request_response, end):
         return
 
-    markup = build_markup(messages, request_response, end)
+    markup = build_markup(messages, request_response, end, plain_text)
     if markup is not None:
         request_response.reply_markup = markup
 
@@ -228,6 +232,7 @@ def build_markup(
     messages: Dict,
     request_response: RequestResponseContainer.RequestResponseContainer,
     end=False,
+    plain_text=False,
 ) -> InlineKeyboardMarkup:
     """
     Build markup for the response
@@ -236,6 +241,9 @@ def build_markup(
     :param end:
     :return: InlineKeyboardMarkup
     """
+    if plain_text:
+        return None
+
     if not end:
         # Generate stop button if it's the first message
         if request_response.message_id is None or request_response.message_id < 0:
@@ -313,15 +321,19 @@ async def parse_img(img_source: str | (str, str)):
     """
     if isinstance(img_source, str):
         try:
-            res = requests.head(
-                img_source,
-                timeout=10,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/91.4472.114 Safari/537.36"
-                },
-                allow_redirects=True,
+            loop = asyncio.get_event_loop()
+            res = await loop.run_in_executor(
+                None,
+                lambda: requests.head(
+                    img_source,
+                    timeout=10,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/91.4472.114 Safari/537.36"
+                    },
+                    allow_redirects=True,
+                ),
             )
             content_type = res.headers.get("content-type")
             if not content_type.startswith("image"):
@@ -1913,8 +1925,15 @@ class BotHandler:
                 message += message_
                 container_counter += 1
 
+            request_response = RequestResponseContainer.RequestResponseContainer(
+                user,
+                response=message,
+                reply_message_id=update.effective_message.id,
+            )
             # Send queue content
-            await _send_safe(user["user_id"], message, context)
+            await send_message_async(
+                self.config, self.messages, request_response, end=True, plain_text=True
+            )
 
     async def bot_command_chatid(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
